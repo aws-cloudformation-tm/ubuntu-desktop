@@ -1,0 +1,184 @@
+Metadata:
+  License: Apache-2.0
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ''
+
+Parameters:
+  InstanceType:
+    Description: Ubuntu Desktkopi EC2 instance type
+    Type: String
+    Default: t2.large
+    AllowedValues: [t1.micro, t2.nano, t2.micro, t2.small, t2.medium, t2.large, m1.small,
+      m1.medium, m1.large, m1.xlarge, m2.xlarge, m2.2xlarge, m2.4xlarge, m3.medium,
+      m3.large, m3.xlarge, m3.2xlarge, m4.large, m4.xlarge, m4.2xlarge, m4.4xlarge,
+      m4.10xlarge, c1.medium, c1.xlarge, c3.large, c3.xlarge, c3.2xlarge, c3.4xlarge,
+      c3.8xlarge, c4.large, c4.xlarge, c4.2xlarge, c4.4xlarge, c4.8xlarge, g2.2xlarge,
+      g2.8xlarge, r3.large, r3.xlarge, r3.2xlarge, r3.4xlarge, r3.8xlarge, i2.xlarge,
+      i2.2xlarge, i2.4xlarge, i2.8xlarge, d2.xlarge, d2.2xlarge, d2.4xlarge, d2.8xlarge,
+      hi1.4xlarge, hs1.8xlarge, cr1.8xlarge, cc2.8xlarge, cg1.4xlarge]
+    ConstraintDescription: must be a valid EC2 instance type.
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instances
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  StackName:
+    Description: Name of Stack 
+    Type: String 
+    Default: mininet
+
+Mappings:
+  StackConfigs:
+    VPC:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+    PublicSubnet:
+      AvailabilityZone: "ap-northeast-1a"
+      CidrBlock: 10.0.1.0/24
+      Name: "10.0.1.0 - ap-northeast-1a"
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !FindInMap [StackConfigs, VPC, CidrBlock]
+      EnableDnsSupport: !FindInMap [StackConfigs, VPC, EnableDnsSupport]
+      EnableDnsHostnames: !FindInMap [StackConfigs, VPC, EnableDnsHostnames]
+      Tags:
+      - Key: Name
+        Value: !Ref 'StackName' 
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:
+        Ref: VPC
+      InternetGatewayId:
+        Ref: InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !FindInMap [StackConfigs, PublicSubnet, AvailabilityZone]
+      CidrBlock: !FindInMap [StackConfigs, PublicSubnet, CidrBlock]
+      MapPublicIpOnLaunch: 'true'
+      VpcId:
+        Ref: VPC
+      Tags:
+      - Key: Name
+        Value: !FindInMap [StackConfigs, PublicSubnet, Name]
+
+  myInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: InternetGateway
+    Properties:
+      ImageId: ami-019617f627a30d5c2 
+      InstanceType: !Ref 'InstanceType'
+      KeyName: !Ref 'KeyName'
+      SecurityGroupIds:
+        - !Ref sshSG
+        - !Ref httpSG
+        - !Ref vncSG
+      SubnetId:
+        Ref: PublicSubnet
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash -xe
+          cd /home/ubuntu
+          git clone https://github.com/mininet/mininet.git
+          chown -R ubuntu:ubuntu mininet
+          systemctl mask apt-daily.service
+          systemctl mask apt-daily.timer
+          systemctl mask apt-daily-upgrade.service
+          systemctl mask apt-daily-upgrade.timer
+          rm /var/lib/apt/lists/lock
+          rm /var/cache/apt/archives/lock
+          rm /var/lib/dpkg/lock
+          dpkg --configure -a
+          apt update
+          apt install -y python-tk xbitmaps xterm git
+          cd mininet
+          git checkout support/2.2.2
+          bash /home/ubuntu/mininet/util/install.sh
+      Tags:
+      - Key: Name
+        Value: !Ref 'StackName' 
+
+  sshSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: ssh
+      GroupDescription: SSH access rule
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        FromPort: 22
+        IpProtocol: tcp
+        ToPort: 22
+      VpcId:
+        Ref: VPC
+
+  httpSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: http 
+      GroupDescription: http access rule
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        FromPort: 80
+        IpProtocol: tcp
+        ToPort: 80
+      VpcId:
+        Ref: VPC
+
+  vncSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: vnc 
+      GroupDescription: vnc access rule
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        FromPort: 5901 
+        IpProtocol: tcp
+        ToPort: 5901 
+      VpcId:
+        Ref: VPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: VPC
+      Tags:
+      - Key: Name
+        Value: public
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGateway
+    Properties:
+      RouteTableId:
+        Ref: PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId:
+        Ref: InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: PublicSubnet
+      RouteTableId:
+        Ref: PublicRouteTable
+
+Outputs:
+  PublicIp:
+    Value: !GetAtt myInstance.PublicIp
+  InstanceId:
+    Value: !Ref myInstance
